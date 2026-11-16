@@ -1,0 +1,32 @@
+# card-authorization-service
+# Do commit: uv.lock, .python-version, pyproject.toml
+
+# Python bytecode
+__pycache__/
+*.py[cod]
+
+# Virtual environment (uv creates it; never commit)
+.venv/
+
+# Build output
+build/
+dist/
+*.egg-info/
+
+# Test, lint and type-check caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+htmlcov/
+
+# Secrets: commit .env.example, never .env
+.env
+.env.*
+!.env.example
+
+# Editors and OS files
+.vscode/
+.idea/
+.DS_Store
+playground/
