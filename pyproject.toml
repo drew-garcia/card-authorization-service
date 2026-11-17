@@ -1,7 +1,7 @@
 [project]
-name = "authz"
+name = "card-authorization-service"
 version = "0.1.0"
-description = "Add your description here"
+description = "A FastAPI and Postgres service that approves or declines card swipes in real time and stays correct under concurrent requests, retries and failures."
 readme = "README.md"
 authors = [
     { name = "Andrew Garcia", email = "git@drewgarcia.dev" }
@@ -24,3 +24,11 @@ dev = [
     "pytest>=9.2.0",
     "ruff>=0.17.5",
 ]
+
+[tool.uv.build-backend]
+# The distribution is named card-authorization-service, but the import package stays `authz`.
+module-name = "authz"
+
+[tool.fastapi]
+# Lets `uv run fastapi dev` find the app without a path argument.
+entrypoint = "authz.main:app"
