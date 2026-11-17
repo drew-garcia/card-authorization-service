@@ -14,7 +14,7 @@ A portfolio project: a FastAPI service that approves or declines card swipes in 
 
 - Sync dependencies: `uv sync`
 - Add a dependency: `uv add <pkg>` (dev only: `uv add --dev <pkg>`)
-- Run the API: `uv run fastapi dev src/authz/main.py`
+- Run the API: `uv run fastapi dev` (entrypoint set in `pyproject.toml`)
 - Tests: `uv run pytest`
 - Lint and format: `uv run ruff check .` and `uv run ruff format .`
 - Type check: `uv run pyright`

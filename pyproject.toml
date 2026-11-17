@@ -28,3 +28,7 @@ dev = [
 [tool.uv.build-backend]
 # The distribution is named card-authorization-service, but the import package stays `authz`.
 module-name = "authz"
+
+[tool.fastapi]
+# Lets `uv run fastapi dev` find the app without a path argument.
+entrypoint = "authz.main:app"
