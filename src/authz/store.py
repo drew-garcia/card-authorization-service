@@ -28,6 +28,5 @@ class CardStore:
         return Card(id=card_id, available_cents=available)
 
     def set_available(self, card_id: UUID, available_cents: int) -> None:
-        if card_id not in self._available_cents:
-            raise KeyError(card_id)
+        # Callers must pass an existing card id (the service checks with get() first).
         self._available_cents[card_id] = available_cents
