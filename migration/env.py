@@ -6,11 +6,11 @@ so there is one source of config and no credentials in the repo.
 
 from logging.config import fileConfig
 
+from alembic import context
 from sqlalchemy import engine_from_config, pool
 from sqlmodel import SQLModel
 
 import authz.models  # noqa: F401  # registers the tables on SQLModel.metadata
-from alembic import context
 from authz.settings import get_settings
 
 config = context.config
