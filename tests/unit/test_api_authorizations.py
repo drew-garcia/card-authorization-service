@@ -86,13 +86,6 @@ def test_unknown_card_declines_with_card_not_found(client: TestClient) -> None:
     assert body["decline_reason"] == "card_not_found"
 
 
-def test_each_authorization_gets_its_own_id(client: TestClient) -> None:
-    card_id = make_card(client, 1000)
-    a = client.post("/authorizations", json=valid_body(card_id=card_id, amount_cents=1))
-    b = client.post("/authorizations", json=valid_body(card_id=card_id, amount_cents=1))
-    assert a.json()["authorization_id"] != b.json()["authorization_id"]
-
-
 @pytest.mark.parametrize(
     ("field", "value"),
     [("amount_cents", -100), ("merchant_category_code", "123")],

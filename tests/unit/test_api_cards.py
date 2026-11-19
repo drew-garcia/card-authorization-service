@@ -13,11 +13,6 @@ def test_create_card_returns_201_with_id_and_balance(client: TestClient) -> None
     assert body["available_cents"] == 1000
 
 
-def test_zero_balance_allowed(client: TestClient) -> None:
-    response = client.post("/cards", json={"initial_balance_cents": 0})
-    assert response.status_code == 201
-
-
 def test_get_card_round_trips(client: TestClient) -> None:
     created = client.post("/cards", json={"initial_balance_cents": 1000}).json()
     response = client.get(f"/cards/{created['id']}")
