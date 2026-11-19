@@ -27,3 +27,41 @@ class AuthorizationRequest(BaseModel):
     # A string, not an int: real MCCs have leading zeros (e.g. "0742").
     # [0-9] rather than \d, because \d also matches non-ASCII digits like "٤".
     merchant_category_code: Annotated[str, StringConstraints(pattern=r"^[0-9]{4}$")]
+
+
+class CardCreate(BaseModel):
+    """Body for POST /cards: open a card with a starting balance."""
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    # ge=0: a card may start empty, but never negative.
+    initial_balance_cents: Annotated[int, Field(ge=0, le=BIGINT_MAX, strict=True)]
+
+
+class Card(BaseModel):
+    """A card as the API returns it."""
+
+    model_config = ConfigDict(frozen=True)
+
+    id: UUID
+    available_cents: int
+
+
+# Literal types give a closed set of values: pyright flags typos, and /docs
+# lists the allowed strings in the response schema.
+Decision = Literal["approved", "declined"]
+DeclineReason = Literal["insufficient_funds", "card_not_found"]
+
+
+class AuthorizationResponse(BaseModel):
+    """Our answer to an AuthorizationRequest."""
+
+    model_config = ConfigDict(frozen=True)
+
+    authorization_id: UUID
+    network_request_id: str
+    card_id: UUID
+    amount_cents: int
+    decision: Decision
+    # None when approved; set when declined.
+    decline_reason: DeclineReason | None

@@ -2,7 +2,8 @@
 
 from fastapi import FastAPI
 
-from authz.api import authorizations
+from authz.api import authorizations, cards
 
 app = FastAPI(title="Card authorization service")
+app.include_router(cards.router)
 app.include_router(authorizations.router)
