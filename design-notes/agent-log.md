@@ -6,7 +6,7 @@ Built the in-memory card API: `POST /cards`, `GET /cards/{id}`, and `POST /autho
 
 ## 2026-11-19: Trimmed optional tests (PR #4)
 
-Removed four low-value tests (distinct ids, zero balance, unique authorization ids, set_available on a missing card). 49 tests pass. The `KeyError` in `CardStore.set_available` is now untested.
+Removed four low-value tests (distinct ids, zero balance, unique authorization ids, set_available on a missing card). 49 tests pass. This left the `KeyError` in `CardStore.set_available` untested, so the check was removed in the next entry.
 
 ## 2026-11-19: Dropped KeyError check (PR #4)
 
