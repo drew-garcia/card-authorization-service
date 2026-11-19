@@ -1,11 +1,15 @@
 """Checks on what the API writes to the database, read back with SQL."""
 
+from collections.abc import Callable
 from uuid import UUID, uuid4
 
 from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from authz.models import AuthorizationRow, CardRow
+
+# The make_card fixture in conftest.py: balance in cents -> new card id.
+MakeCard = Callable[[int], str]
 
 
 def auth_body(
@@ -21,10 +25,9 @@ def auth_body(
     }
 
 
-def make_card(client: TestClient, balance_cents: int) -> str:
-    return client.post("/cards", json={"initial_balance_cents": balance_cents}).json()[
-        "id"
-    ]
+def create_card_via_api(client: TestClient, balance_cents: int) -> str:
+    response = client.post("/cards", json={"initial_balance_cents": balance_cents})
+    return response.json()["id"]
 
 
 def stored_card(session: Session, card_id: str) -> CardRow:
@@ -38,13 +41,15 @@ def stored_authorizations(session: Session) -> list[AuthorizationRow]:
 
 
 def test_new_card_limit_equals_available(client: TestClient, session: Session) -> None:
-    card = stored_card(session, make_card(client, 1000))
+    card = stored_card(session, create_card_via_api(client, 1000))
     assert card.limit_cents == 1000
     assert card.available_cents == 1000
 
 
-def test_approval_is_recorded(client: TestClient, session: Session) -> None:
-    card_id = make_card(client, 1000)
+def test_approval_is_recorded(
+    client: TestClient, session: Session, make_card: MakeCard
+) -> None:
+    card_id = make_card(1000)
     response = client.post("/authorizations", json=auth_body(card_id, 600)).json()
 
     [row] = stored_authorizations(session)
@@ -61,9 +66,9 @@ def test_approval_is_recorded(client: TestClient, session: Session) -> None:
 
 
 def test_insufficient_funds_decline_is_recorded(
-    client: TestClient, session: Session
+    client: TestClient, session: Session, make_card: MakeCard
 ) -> None:
-    card_id = make_card(client, 1000)
+    card_id = make_card(1000)
     client.post("/authorizations", json=auth_body(card_id, 1001))
 
     [row] = stored_authorizations(session)
@@ -85,5 +90,5 @@ def test_unknown_card_decline_is_recorded(client: TestClient, session: Session) 
 
 def test_balance_above_32_bit_range_round_trips(client: TestClient) -> None:
     # 2**31 cents is past what a 32-bit INTEGER column can hold.
-    card_id = make_card(client, 2**31)
+    card_id = create_card_via_api(client, 2**31)
     assert client.get(f"/cards/{card_id}").json()["available_cents"] == 2**31

@@ -1,8 +1,12 @@
+from collections.abc import Callable
 from typing import Any
 from uuid import uuid4
 
 import pytest
 from fastapi.testclient import TestClient
+
+# The make_card fixture in conftest.py: balance in cents -> new card id.
+MakeCard = Callable[[int], str]
 
 
 def valid_body(**overrides: Any) -> dict[str, Any]:
@@ -18,17 +22,12 @@ def valid_body(**overrides: Any) -> dict[str, Any]:
     return body
 
 
-def make_card(client: TestClient, balance_cents: int) -> str:
-    response = client.post("/cards", json={"initial_balance_cents": balance_cents})
-    return response.json()["id"]
-
-
 def balance(client: TestClient, card_id: str) -> int:
     return client.get(f"/cards/{card_id}").json()["available_cents"]
 
 
-def test_approve_subtracts_amount(client: TestClient) -> None:
-    card_id = make_card(client, 1000)
+def test_approve_subtracts_amount(client: TestClient, make_card: MakeCard) -> None:
+    card_id = make_card(1000)
     response = client.post(
         "/authorizations", json=valid_body(card_id=card_id, amount_cents=600)
     )
@@ -42,8 +41,8 @@ def test_approve_subtracts_amount(client: TestClient) -> None:
     assert balance(client, card_id) == 400
 
 
-def test_exact_balance_is_approved(client: TestClient) -> None:
-    card_id = make_card(client, 1000)
+def test_exact_balance_is_approved(client: TestClient, make_card: MakeCard) -> None:
+    card_id = make_card(1000)
     response = client.post(
         "/authorizations", json=valid_body(card_id=card_id, amount_cents=1000)
     )
@@ -51,8 +50,10 @@ def test_exact_balance_is_approved(client: TestClient) -> None:
     assert balance(client, card_id) == 0
 
 
-def test_over_balance_declines_and_keeps_balance(client: TestClient) -> None:
-    card_id = make_card(client, 1000)
+def test_over_balance_declines_and_keeps_balance(
+    client: TestClient, make_card: MakeCard
+) -> None:
+    card_id = make_card(1000)
     response = client.post(
         "/authorizations", json=valid_body(card_id=card_id, amount_cents=1001)
     )
@@ -63,8 +64,10 @@ def test_over_balance_declines_and_keeps_balance(client: TestClient) -> None:
     assert balance(client, card_id) == 1000
 
 
-def test_second_swipe_declines_once_balance_is_spent(client: TestClient) -> None:
-    card_id = make_card(client, 1000)
+def test_second_swipe_declines_once_balance_is_spent(
+    client: TestClient, make_card: MakeCard
+) -> None:
+    card_id = make_card(1000)
     first = client.post(
         "/authorizations",
         json=valid_body(network_request_id="a", card_id=card_id, amount_cents=600),
