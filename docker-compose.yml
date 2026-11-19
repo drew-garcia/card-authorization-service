@@ -1,0 +1,24 @@
+# Local development database. The credentials are for this machine only.
+services:
+  postgres:
+    image: postgres:17
+    environment:
+      POSTGRES_USER: authz
+      POSTGRES_PASSWORD: authz
+      POSTGRES_DB: authz
+    ports:
+      # Host port 5433, so it doesn't clash with a Postgres already on 5432.
+      - "5433:5432"
+    volumes:
+      # A named volume keeps the data when the container restarts or is recreated.
+      - pgdata:/var/lib/postgresql/data
+      # Scripts here run once, the first time the volume is initialised.
+      - ./docker/initdb:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U authz -d authz"]
+      interval: 2s
+      timeout: 3s
+      retries: 15
+
+volumes:
+  pgdata:
