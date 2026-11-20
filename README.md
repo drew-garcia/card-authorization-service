@@ -1,5 +1,7 @@
 # Card authorization service
 
+[![CI](https://github.com/drew-garcia/card-authorization-service/actions/workflows/ci.yml/badge.svg)](https://github.com/drew-garcia/card-authorization-service/actions/workflows/ci.yml)
+
 A FastAPI and Postgres service that approves or declines card swipes in real time.
 
 ## Running locally

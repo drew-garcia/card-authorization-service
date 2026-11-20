@@ -1,0 +1,76 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+# A newer push to the same branch or PR cancels the run still in progress.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    # A throwaway Postgres 17 for this job only, the same version as docker-compose.yml.
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: authz
+          POSTGRES_PASSWORD: authz
+          POSTGRES_DB: authz
+        ports:
+          - 5432:5432
+        # Steps wait until this health check passes before they start.
+        options: >-
+          --health-cmd "pg_isready -U authz -d authz"
+          --health-interval 2s
+          --health-timeout 3s
+          --health-retries 15
+
+    env:
+      # CI-only credentials for the throwaway database above; not a secret.
+      DATABASE_URL: postgresql+psycopg://authz:authz@localhost:5432/authz
+
+    steps:
+      - uses: actions/checkout@v7
+
+      # setup-uv publishes only full version tags (no floating v10), so pin one.
+      - uses: astral-sh/setup-uv@v10.4.0
+        with:
+          # Python comes from .python-version, so CI and local use the same one.
+          enable-cache: true
+
+      - name: Install dependencies
+        # --locked fails if uv.lock is out of date with pyproject.toml.
+        run: uv sync --locked
+
+      - name: Ruff lint
+        run: uv run ruff check .
+
+      - name: Ruff format
+        run: uv run ruff format --check .
+
+      - name: Pyright
+        run: uv run pyright
+
+      - name: Create test database
+        # Locally docker/initdb/create-test-db.sql does this; service containers
+        # can't mount files from the repo, so run the same script with psql.
+        run: psql "postgresql://authz:authz@localhost:5432/authz" -f docker/initdb/create-test-db.sql
+
+      - name: Migrations
+        # Apply every migration to the fresh authz database, as a deploy would.
+        run: uv run alembic upgrade head
+
+      - name: Pytest
+        # -rxX lists expected failures (xfail) and unexpected passes (xpass) in the summary.
+        run: uv run pytest -rxX
