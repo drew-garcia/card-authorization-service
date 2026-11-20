@@ -11,3 +11,7 @@ Removed four low-value tests (distinct ids, zero balance, unique authorization i
 ## 2026-11-19: Dropped KeyError check (PR #4)
 
 Removed the untested `KeyError` check from `CardStore.set_available`. Callers must now pass an existing card id; the authorize service already guarantees this by calling `get()` first.
+
+## 2026-11-20: Authorization race test (PR #7)
+
+Added a concurrency race test: a `uvicorn --workers 4` fixture, and 20 concurrent $10 authorizations against a $100 card asserting 10 approvals (xfail "race, fix later"). All 5 runs gave 20 approvals. Moved the shared DB fixtures to `tests/conftest.py` with `clean_tables` opt-in per folder. Not sure about: non-strict xfail (a lucky run shows as XPASS).
