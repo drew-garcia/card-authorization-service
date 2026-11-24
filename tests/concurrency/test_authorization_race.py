@@ -4,7 +4,6 @@ import asyncio
 from collections.abc import Callable
 
 import httpx
-import pytest
 
 # The make_card fixture in tests/conftest.py: balance in cents -> new card id.
 MakeCard = Callable[[int], str]
@@ -39,7 +38,6 @@ async def _swipe_concurrently(base_url: str, card_id: str) -> int:
     return sum(r.json()["decision"] == "approved" for r in responses)
 
 
-@pytest.mark.xfail(reason="race, fix later")
 def test_concurrent_authorizations_approve_only_what_fits(
     live_server: str, make_card: MakeCard
 ) -> None:
@@ -48,3 +46,6 @@ def test_concurrent_authorizations_approve_only_what_fits(
     # closes the loop, so a plain (sync) test can drive async code.
     approvals = asyncio.run(_swipe_concurrently(live_server, card_id))
     assert approvals == LIMIT_CENTS // AMOUNT_CENTS, f"{approvals} approvals"
+    # Approvals alone could hide a lost update; the money must add up too.
+    card = httpx.get(f"{live_server}/cards/{card_id}").json()
+    assert card["available_cents"] == LIMIT_CENTS - approvals * AMOUNT_CENTS
