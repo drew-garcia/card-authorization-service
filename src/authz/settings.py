@@ -1,6 +1,7 @@
 """Configuration, read from environment variables (and a local .env file)."""
 
 from functools import lru_cache
+from typing import Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -12,6 +13,9 @@ class Settings(BaseSettings):
 
     # No default on purpose: a missing URL should fail loudly at startup.
     database_url: str
+
+    # BENCH ONLY: which race fix authorize() uses.
+    authz_race_strategy: Literal["lock", "conditional", "serializable"] = "lock"
 
 
 @lru_cache
