@@ -7,6 +7,8 @@ from fastapi.testclient import TestClient
 from sqlmodel import Session, select
 
 from authz.models import AuthorizationRow, CardRow
+from authz.schemas import AuthorizationRequest
+from authz.services.authorizations import request_hash
 
 # The make_card fixture in conftest.py: balance in cents -> new card id.
 MakeCard = Callable[[int], str]
@@ -92,3 +94,25 @@ def test_balance_above_32_bit_range_round_trips(client: TestClient) -> None:
     # 2**31 cents is past what a 32-bit INTEGER column can hold.
     card_id = create_card_via_api(client, 2**31)
     assert client.get(f"/cards/{card_id}").json()["available_cents"] == 2**31
+
+
+def test_request_hash_is_stored(
+    client: TestClient, session: Session, make_card: MakeCard
+) -> None:
+    body = auth_body(make_card(1000), 600)
+    client.post("/authorizations", json=body)
+
+    [row] = stored_authorizations(session)
+    assert row.request_hash == request_hash(AuthorizationRequest.model_validate(body))
+
+
+def test_repeats_and_conflicts_add_no_rows(
+    client: TestClient, session: Session, make_card: MakeCard
+) -> None:
+    body = auth_body(make_card(1000), 600)
+    client.post("/authorizations", json=body)
+    client.post("/authorizations", json=body)
+    client.post("/authorizations", json={**body, "amount_cents": 100})
+
+    [row] = stored_authorizations(session)
+    assert row.amount_cents == 600

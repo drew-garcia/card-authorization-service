@@ -8,7 +8,15 @@ so the database layout can change without changing the HTTP contract.
 from datetime import datetime
 from uuid import UUID, uuid4
 
-from sqlalchemy import BigInteger, CheckConstraint, Column, DateTime, Text, func
+from sqlalchemy import (
+    BigInteger,
+    CheckConstraint,
+    Column,
+    DateTime,
+    Text,
+    UniqueConstraint,
+    func,
+)
 from sqlmodel import Field, SQLModel
 
 
@@ -35,11 +43,19 @@ class AuthorizationRow(SQLModel, table=True):
         CheckConstraint(
             "decision IN ('approved', 'declined')", name="ck_authorizations_decision"
         ),
+        # The idempotency key (hard rule 4). INSERT ... ON CONFLICT relies on
+        # this; it also gives the index used to look a request up by its id.
+        UniqueConstraint(
+            "network_request_id", name="uq_authorizations_network_request_id"
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
-    # Indexed for lookups by the network's id. Not unique yet.
-    network_request_id: str = Field(max_length=64, index=True)
+    # Unique: see uq_authorizations_network_request_id above.
+    network_request_id: str = Field(max_length=64)
+    # SHA-256 hex of the validated request body. A repeat with the same id but
+    # a different hash is a different request reusing the id: 409.
+    request_hash: str = Field(max_length=64)
     # Deliberately no foreign key: declines for unknown cards are recorded too,
     # and their card_id doesn't exist in cards.
     card_id: UUID
