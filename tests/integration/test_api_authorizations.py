@@ -118,3 +118,60 @@ def test_invalid_body_returns_422(client: TestClient, field: str, value: Any) ->
     response = client.post("/authorizations", json=valid_body(**{field: value}))
     assert response.status_code == 422
     assert response.json()["detail"][0]["loc"] == ["body", field]
+
+
+# Idempotency on network_request_id (hard rule 4).
+
+
+def test_repeat_with_same_body_returns_original_and_debits_once(
+    client: TestClient, make_card: MakeCard
+) -> None:
+    card_id = make_card(1000)
+    body = valid_body(card_id=card_id, amount_cents=600)
+    first = client.post("/authorizations", json=body)
+    second = client.post("/authorizations", json=body)
+    assert first.status_code == second.status_code == 200
+    assert second.json() == first.json()
+    assert balance(client, card_id) == 400
+
+
+def test_repeat_after_balance_is_spent_still_returns_original_approval(
+    client: TestClient, make_card: MakeCard
+) -> None:
+    # Deciding again would decline (only 400 left); the original was approved.
+    card_id = make_card(1000)
+    body = valid_body(card_id=card_id, amount_cents=600)
+    first = client.post("/authorizations", json=body).json()
+    second = client.post("/authorizations", json=body).json()
+    assert first["decision"] == "approved"
+    assert second == first
+    assert balance(client, card_id) == 400
+
+
+def test_repeat_of_declined_unknown_card_returns_same_decline(
+    client: TestClient,
+) -> None:
+    body = valid_body(card_id=str(uuid4()))
+    first = client.post("/authorizations", json=body).json()
+    second = client.post("/authorizations", json=body).json()
+    assert first["decline_reason"] == "card_not_found"
+    assert second == first
+
+
+def test_repeat_with_different_body_returns_409_and_changes_nothing(
+    client: TestClient, make_card: MakeCard
+) -> None:
+    card_id = make_card(1000)
+    body = valid_body(card_id=card_id, amount_cents=600)
+    original = client.post("/authorizations", json=body).json()
+
+    conflict = client.post("/authorizations", json={**body, "amount_cents": 100})
+    assert conflict.status_code == 409
+    assert "different request body" in conflict.json()["detail"]
+    # The 409's own debit was rolled back.
+    assert balance(client, card_id) == 400
+
+    # The original body still replays after the conflict.
+    replay = client.post("/authorizations", json=body)
+    assert replay.status_code == 200
+    assert replay.json() == original

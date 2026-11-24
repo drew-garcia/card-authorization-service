@@ -23,3 +23,11 @@ Fixed the authorization race with `SELECT ... FOR UPDATE` on the card row. Remov
 ## 2026-11-24: Conditional UPDATE replaces the row lock; three race fixes compared
 
 Swapped `authorize()` to one `UPDATE ... WHERE available_cents >= :amt RETURNING` (way 2). Compared it with `FOR UPDATE` (way 1) and SERIALIZABLE + 3 retries (way 3) in `design-notes/race-fixes.md`, using an unmerged `bench/race-strategies` branch. Ways 1 and 2 are correct with no retries; way 3 keeps the money right but returns 503 for about half the swipes on one hot card. Added `--runs`, status counts and a balance check to the timing script, plus two decline edge-case tests. Not sure about: ways 1 and 2 are within noise on one card; way 3's rare retries with no shared row look like SSI false positives, not verified.
+
+## 2026-11-24: Idempotent authorizations (PR #11)
+
+Added a unique constraint on `network_request_id`, a `request_hash` column (SHA-256 of the validated body), and `INSERT ... ON CONFLICT DO NOTHING` after the conditional UPDATE. On a repeat it rolls back (undoing the debit): same hash returns the original response, different hash returns 409. 50 identical concurrent requests create 1 row and get identical responses, 20/20 runs. Also fixed `live_server`: an unread stdout pipe filled up and froze the workers, and a shutdown timeout left orphaned workers holding DB connections. Not sure about: option A (debit, then insert) makes repeats take the card lock briefly; claiming the id first may fit better once holds and the ledger exist.
+
+## 2026-11-24: Dev database reset and migrated (PR #11)
+
+Reset the dev database (`alembic downgrade base`, dropping 155 cards and 350 authorizations of timing data), then `alembic upgrade head` to `daa7aa521fce`; `alembic check` is clean. Checked by hand against a live server: a repeat returns the original response and debits once, and a different body returns 409. It left one test card and authorization (`manual-1`) in the dev database.

@@ -1,6 +1,11 @@
 """Business logic for approving or declining card swipes."""
 
+import hashlib
+import json
+from uuid import uuid4
+
 from sqlalchemy import update
+from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
 from authz.models import AuthorizationRow, CardRow
@@ -10,6 +15,24 @@ from authz.schemas import (
     Decision,
     DeclineReason,
 )
+
+
+class IdempotencyConflict(Exception):
+    """A network_request_id was reused with a different request body."""
+
+
+def request_hash(request: AuthorizationRequest) -> str:
+    """SHA-256 hex of the validated request, used to tell a retry from a reuse.
+
+    It hashes the parsed model, not the raw bytes, so JSON key order and the
+    whitespace Pydantic strips don't count as a different body. sort_keys and
+    fixed separators make the JSON text canonical; mode="json" turns the UUID
+    into a string so json.dumps can handle it.
+    """
+    canonical = json.dumps(
+        request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
+    )
+    return hashlib.sha256(canonical.encode()).hexdigest()
 
 
 def authorize(session: Session, request: AuthorizationRequest) -> AuthorizationResponse:
@@ -26,9 +49,18 @@ def authorize(session: Session, request: AuthorizationRequest) -> AuthorizationR
     gap in Python, and no retries. design-notes/race-fixes.md compares this
     with SELECT ... FOR UPDATE and SERIALIZABLE.
 
-    Not idempotent yet: a repeated network_request_id is decided again
-    (hard rule 4).
+    Idempotent on network_request_id (hard rule 4). The record is written with
+    INSERT ... ON CONFLICT DO NOTHING against a unique constraint. If another
+    transaction holds the same id, Postgres makes this INSERT wait until that
+    one commits, then inserts nothing. Nothing back means this is a repeat: we
+    roll back, which undoes the debit above, and answer from the stored row.
+    The same body hash gets the original response; a different one raises
+    IdempotencyConflict (409). A repeat does take the card's row lock and
+    debit briefly before rolling back; that was the trade-off chosen over
+    claiming the id first, which would need a nullable decision column.
     """
+    hash_hex = request_hash(request)
+
     # update() rather than text(): the column names are checked by pyright and
     # follow the model. col() tells pyright these are SQL columns, not ints.
     # The session begins a transaction on this first statement.
@@ -54,21 +86,63 @@ def authorize(session: Session, request: AuthorizationRequest) -> AuthorizationR
         decline_reason = "insufficient_funds" if card_exists else "card_not_found"
 
     decision: Decision = "approved" if decline_reason is None else "declined"
-    row = AuthorizationRow(
+    # A Core insert rather than session.add(): the ORM can't express
+    # ON CONFLICT. id is passed explicitly because the model's default_factory
+    # only runs when a model object is built, not for a Core insert.
+    authorization_id = session.exec(
+        insert(AuthorizationRow)
+        .values(
+            id=uuid4(),
+            network_request_id=request.network_request_id,
+            request_hash=hash_hex,
+            card_id=request.card_id,
+            amount_cents=request.amount_cents,
+            decision=decision,
+            decline_reason=decline_reason,
+        )
+        .on_conflict_do_nothing(index_elements=["network_request_id"])
+        .returning(col(AuthorizationRow.id))
+    ).scalar_one_or_none()
+
+    if authorization_id is None:
+        # A repeat. Roll back first so the debit above never commits, then
+        # read the original. It is visible: ON CONFLICT only resolves once the
+        # other transaction has committed, and under READ COMMITTED each new
+        # statement sees everything committed before it starts.
+        session.rollback()
+        original = session.exec(
+            select(AuthorizationRow).where(
+                AuthorizationRow.network_request_id == request.network_request_id
+            )
+        ).one()
+        if original.request_hash != hash_hex:
+            raise IdempotencyConflict(request.network_request_id)
+        return _to_response(original)
+
+    session.commit()
+    return AuthorizationResponse(
+        authorization_id=authorization_id,
         network_request_id=request.network_request_id,
         card_id=request.card_id,
         amount_cents=request.amount_cents,
         decision=decision,
         decline_reason=decline_reason,
     )
-    session.add(row)
-    session.commit()
 
-    return AuthorizationResponse(
-        authorization_id=row.id,
-        network_request_id=request.network_request_id,
-        card_id=request.card_id,
-        amount_cents=request.amount_cents,
-        decision=decision,
-        decline_reason=decline_reason,
+
+def _to_response(row: AuthorizationRow) -> AuthorizationResponse:
+    """Rebuild the original response from its stored row.
+
+    model_validate checks decision and decline_reason against the Literal
+    types, since the row stores them as plain text.
+    """
+    return AuthorizationResponse.model_validate(
+        {
+            "authorization_id": row.id,
+            "network_request_id": row.network_request_id,
+            "card_id": row.card_id,
+            "amount_cents": row.amount_cents,
+            "decision": row.decision,
+            "decline_reason": row.decline_reason,
+        }
     )
