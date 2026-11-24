@@ -5,6 +5,8 @@ from uuid import uuid4
 import pytest
 from fastapi.testclient import TestClient
 
+from authz.schemas import BIGINT_MAX
+
 # The make_card fixture in conftest.py: balance in cents -> new card id.
 MakeCard = Callable[[int], str]
 
@@ -62,6 +64,25 @@ def test_over_balance_declines_and_keeps_balance(
     assert body["decision"] == "declined"
     assert body["decline_reason"] == "insufficient_funds"
     assert balance(client, card_id) == 1000
+
+
+# The conditional UPDATE matches no row for these, so the service must still
+# find the card and say insufficient_funds, not card_not_found or a 500.
+@pytest.mark.parametrize(
+    ("balance_cents", "amount_cents"),
+    [(0, 1), (1000, BIGINT_MAX)],
+    ids=["empty_card", "amount_at_bigint_max"],
+)
+def test_existing_card_that_cannot_cover_declines_insufficient_funds(
+    client: TestClient, make_card: MakeCard, balance_cents: int, amount_cents: int
+) -> None:
+    card_id = make_card(balance_cents)
+    response = client.post(
+        "/authorizations", json=valid_body(card_id=card_id, amount_cents=amount_cents)
+    )
+    assert response.status_code == 200
+    assert response.json()["decline_reason"] == "insufficient_funds"
+    assert balance(client, card_id) == balance_cents
 
 
 def test_second_swipe_declines_once_balance_is_spent(
