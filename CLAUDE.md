@@ -38,7 +38,6 @@ Some of these don't exist yet. Create a folder only when a task needs it.
 1. Money is always an integer number of cents (`int` in Python, `BIGINT` in Postgres). Never use float for amounts. Amount fields end in `_cents`.
 2. Every change to a card's balance, a hold or the ledger happens inside one database transaction, together with its outbox event (once the outbox exists).
 3. Never read a balance, check it in Python, then write it back. Balance changes use a row lock or a conditional `UPDATE ... WHERE available_cents >= :amount`.
-   - **Exception:** the current read-check-write in the authorization path is deliberate, so the race test fails on purpose. Don't fix it unless asked.
 4. Network IDs (`network_request_id`, `network_capture_id`, `network_reversal_id`, `advice_id`) are idempotency keys. A repeat with the same body returns the original response; a repeat with a different body returns 409.
 5. Every ledger transaction's entries sum to zero.
 6. Never edit a migration that has already been applied. Add a new one.
