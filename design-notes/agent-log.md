@@ -19,3 +19,7 @@ Added a concurrency race test: a `uvicorn --workers 4` fixture, and 20 concurren
 ## 2026-11-24: Row lock fixes the authorization race (PR #9)
 
 Fixed the authorization race with `SELECT ... FOR UPDATE` on the card row. Removed xfail from the race test and added a final-balance check. Race test passes 20/20 with `--count 20` and fails without the lock. Added `pytest-repeat` and `scripts/time_authorizations.py`. Timing: 50 concurrent requests on one card, p50 ~490 ms and p99 ~670–790 ms, versus ~350 / ~500 ms with one card per request. Not sure about: the no-contention latency is high, and the cause hasn't been looked into.
+
+## 2026-11-24: Conditional UPDATE replaces the row lock; three race fixes compared
+
+Swapped `authorize()` to one `UPDATE ... WHERE available_cents >= :amt RETURNING` (way 2). Compared it with `FOR UPDATE` (way 1) and SERIALIZABLE + 3 retries (way 3) in `design-notes/race-fixes.md`, using an unmerged `bench/race-strategies` branch. Ways 1 and 2 are correct with no retries; way 3 keeps the money right but returns 503 for about half the swipes on one hot card. Added `--runs`, status counts and a balance check to the timing script, plus two decline edge-case tests. Not sure about: ways 1 and 2 are within noise on one card; way 3's rare retries with no shared row look like SSI false positives, not verified.
