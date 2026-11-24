@@ -15,3 +15,7 @@ Removed the untested `KeyError` check from `CardStore.set_available`. Callers mu
 ## 2026-11-20: Authorization race test (PR #7)
 
 Added a concurrency race test: a `uvicorn --workers 4` fixture, and 20 concurrent $10 authorizations against a $100 card asserting 10 approvals (xfail "race, fix later"). All 5 runs gave 20 approvals. Moved the shared DB fixtures to `tests/conftest.py` with `clean_tables` opt-in per folder. Not sure about: non-strict xfail (a lucky run shows as XPASS).
+
+## 2026-11-24: Row lock fixes the authorization race (PR #9)
+
+Fixed the authorization race with `SELECT ... FOR UPDATE` on the card row. Removed xfail from the race test and added a final-balance check. Race test passes 20/20 with `--count 20` and fails without the lock. Added `pytest-repeat` and `scripts/time_authorizations.py`. Timing: 50 concurrent requests on one card, p50 ~490 ms and p99 ~670–790 ms, versus ~350 / ~500 ms with one card per request. Not sure about: the no-contention latency is high, and the cause hasn't been looked into.
