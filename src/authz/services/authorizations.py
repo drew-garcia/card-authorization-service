@@ -1,14 +1,12 @@
 """Business logic for approving or declining card swipes."""
 
-import hashlib
-import json
 from uuid import uuid4
 
 from sqlalchemy import update
 from sqlalchemy.dialects.postgresql import insert
 from sqlmodel import Session, col, select
 
-from authz.models import AuthorizationRow, CardRow
+from authz.models import AuthorizationRow, CardRow, HoldRow
 from authz.schemas import (
     AuthorizationRequest,
     AuthorizationResponse,
@@ -16,23 +14,10 @@ from authz.schemas import (
     DeclineReason,
 )
 
+# Re-exported: they lived here before captures and reversals needed them too.
+from authz.services.idempotency import IdempotencyConflict, request_hash
 
-class IdempotencyConflict(Exception):
-    """A network_request_id was reused with a different request body."""
-
-
-def request_hash(request: AuthorizationRequest) -> str:
-    """SHA-256 hex of the validated request, used to tell a retry from a reuse.
-
-    It hashes the parsed model, not the raw bytes, so JSON key order and the
-    whitespace Pydantic strips don't count as a different body. sort_keys and
-    fixed separators make the JSON text canonical; mode="json" turns the UUID
-    into a string so json.dumps can handle it.
-    """
-    canonical = json.dumps(
-        request.model_dump(mode="json"), sort_keys=True, separators=(",", ":")
-    )
-    return hashlib.sha256(canonical.encode()).hexdigest()
+__all__ = ["IdempotencyConflict", "authorize", "request_hash"]
 
 
 def authorize(session: Session, request: AuthorizationRequest) -> AuthorizationResponse:
@@ -58,6 +43,11 @@ def authorize(session: Session, request: AuthorizationRequest) -> AuthorizationR
     IdempotencyConflict (409). A repeat does take the card's row lock and
     debit briefly before rolling back; that was the trade-off chosen over
     claiming the id first, which would need a nullable decision column.
+
+    An approval also places a pending hold for the amount, in the same
+    transaction, so the debit and the hold always commit (or roll back)
+    together. A repeat rolls back before the hold is written, so it never
+    makes a second one.
     """
     hash_hex = request_hash(request)
 
@@ -119,6 +109,15 @@ def authorize(session: Session, request: AuthorizationRequest) -> AuthorizationR
             raise IdempotencyConflict(request.network_request_id)
         return _to_response(original)
 
+    if decision == "approved":
+        session.add(
+            HoldRow(
+                authorization_id=authorization_id,
+                card_id=request.card_id,
+                amount_cents=request.amount_cents,
+            )
+        )
+    # commit() flushes the pending HoldRow INSERT first.
     session.commit()
     return AuthorizationResponse(
         authorization_id=authorization_id,
