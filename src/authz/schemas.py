@@ -65,3 +65,52 @@ class AuthorizationResponse(BaseModel):
     decision: Decision
     # None when approved; set when declined.
     decline_reason: DeclineReason | None
+
+
+# A hold's state. Only pending can change; the other four are final.
+HoldStatus = Literal["pending", "captured", "partially_captured", "reversed", "expired"]
+
+
+class CaptureRequest(BaseModel):
+    """The network settling an approved authorization for all or part of its hold."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    # Idempotency key from the network (hard rule 4).
+    network_capture_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    # The authorization_id we returned when we approved the swipe.
+    authorization_id: UUID
+    # How much of the hold to keep. The rest goes back to the card.
+    amount_cents: Annotated[int, Field(gt=0, le=BIGINT_MAX, strict=True)]
+
+
+class CaptureResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    capture_id: UUID
+    network_capture_id: str
+    authorization_id: UUID
+    amount_cents: int
+    # Hold amount minus amount_cents, added back to the card's available_cents.
+    released_cents: int
+    hold_status: HoldStatus
+
+
+class ReversalRequest(BaseModel):
+    """The network cancelling an approved authorization, releasing its whole hold."""
+
+    model_config = ConfigDict(extra="forbid", str_strip_whitespace=True, frozen=True)
+
+    # Idempotency key from the network (hard rule 4).
+    network_reversal_id: Annotated[str, StringConstraints(min_length=1, max_length=64)]
+    authorization_id: UUID
+
+
+class ReversalResponse(BaseModel):
+    model_config = ConfigDict(frozen=True)
+
+    reversal_id: UUID
+    network_reversal_id: str
+    authorization_id: UUID
+    released_cents: int
+    hold_status: HoldStatus
