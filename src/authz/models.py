@@ -202,3 +202,101 @@ class ReversalRow(SQLModel, table=True):
             DateTime(timezone=True), nullable=False, server_default=func.now()
         ),
     )
+
+
+# The ledger. Every movement of money is one ledger transaction made of signed
+# entries that sum to zero (hard rule 5): money leaves one account and arrives
+# in another, so it is never created or destroyed. A capture posts
+# card_spend -X (the card owes X) and merchant_settlement +X (the merchant is
+# owed X). models.py and services/ledger.py both list the accounts and kinds;
+# the unit tests check they match the CHECK constraints below.
+LEDGER_ACCOUNTS = ("card_spend", "merchant_settlement")
+LEDGER_TRANSACTION_KINDS = ("capture",)
+
+
+class LedgerTransactionRow(SQLModel, table=True):
+    """One balanced posting: the header its ledger entries belong to."""
+
+    __tablename__ = "ledger_transactions"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint("kind IN ('capture')", name="ck_ledger_transactions_kind"),
+        # A backstop: one capture can never post twice, even if the capture's
+        # own idempotency check were broken.
+        UniqueConstraint("capture_id", name="uq_ledger_transactions_capture_id"),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    kind: str = Field(sa_type=Text)
+    capture_id: UUID = Field(
+        sa_column=Column(
+            Uuid,
+            ForeignKey("captures.id", name="fk_ledger_transactions_capture_id"),
+            nullable=False,
+        )
+    )
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True), nullable=False, server_default=func.now()
+        ),
+    )
+
+
+class LedgerEntryRow(SQLModel, table=True):
+    """One signed line of a ledger transaction.
+
+    Negative takes money out of the account, positive puts it in. Entries are
+    only ever inserted, never updated or deleted: a mistake is corrected by a
+    new transaction, so the history stays complete.
+
+    The migration also adds a deferred constraint trigger that checks, at
+    commit, that each transaction's entries sum to zero. A CHECK constraint
+    can't do that: it only sees one row at a time.
+    """
+
+    __tablename__ = "ledger_entries"  # pyright: ignore[reportAssignmentType]
+    __table_args__ = (
+        CheckConstraint("amount_cents <> 0", name="ck_ledger_entries_amount_nonzero"),
+        CheckConstraint(
+            "account IN ('card_spend', 'merchant_settlement')",
+            name="ck_ledger_entries_account",
+        ),
+        # card_spend entries belong to a card; merchant_settlement is one
+        # shared system account, so it has none. (a = b on two booleans is
+        # true when both are true or both are false.)
+        CheckConstraint(
+            "(account = 'card_spend') = (card_id IS NOT NULL)",
+            name="ck_ledger_entries_card_matches_account",
+        ),
+    )
+
+    id: UUID = Field(default_factory=uuid4, primary_key=True)
+    ledger_transaction_id: UUID = Field(
+        sa_column=Column(
+            Uuid,
+            ForeignKey(
+                "ledger_transactions.id",
+                name="fk_ledger_entries_ledger_transaction_id",
+            ),
+            nullable=False,
+            index=True,
+        )
+    )
+    account: str = Field(sa_type=Text)
+    card_id: UUID | None = Field(
+        default=None,
+        sa_column=Column(
+            Uuid,
+            ForeignKey("cards.id", name="fk_ledger_entries_card_id"),
+            nullable=True,
+            index=True,
+        ),
+    )
+    # Signed, unlike every other *_cents column.
+    amount_cents: int = Field(sa_type=BigInteger)
+    created_at: datetime | None = Field(
+        default=None,
+        sa_column=Column(
+            DateTime(timezone=True), nullable=False, server_default=func.now()
+        ),
+    )

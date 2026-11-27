@@ -30,6 +30,7 @@ from authz.schemas import (
     ReversalRequest,
     ReversalResponse,
 )
+from authz.services import ledger
 from authz.services.idempotency import IdempotencyConflict, request_hash
 
 
@@ -102,6 +103,8 @@ def reversal_outcome(status: str) -> HoldStatus:
 #    UPDATE cards SET available_cents = available_cents + :released.
 #    Postgres does the addition, so it can't lose a concurrent authorization's
 #    debit (hard rule 3).
+# 5. A capture also posts its ledger transaction (services/ledger.py). It
+#    only inserts rows, so it takes no lock beyond the ones above.
 #
 # Lock order is always hold, then card. authorize() locks the card and then
 # inserts a new hold, but it never locks an existing hold, so the two can't
@@ -173,6 +176,9 @@ def _capture(session: Session, request: CaptureRequest) -> CaptureResponse:
         return _replay_capture(session, original, hash_hex)
 
     _settle_hold(session, hold, new_status, request.amount_cents, released_cents)
+    # In the same transaction as the capture (hard rule 2): the entries
+    # commit with it, or roll back with it if anything below fails.
+    ledger.post_capture(session, capture_id, hold.card_id, request.amount_cents)
     session.commit()
     # request.authorization_id, not hold.authorization_id: commit expires
     # loaded rows, and reading one again would run another SELECT.
