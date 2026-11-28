@@ -75,6 +75,67 @@ def test_upgrade_backfills_holds_for_approved_authorizations(
             conn.execute(text("TRUNCATE cards, authorizations, holds CASCADE"))
 
 
+def test_upgrade_backfills_ledger_transactions_for_captures(
+    engine: Engine, alembic_config: Config
+) -> None:
+    """Captures made before the ledger existed get their two balanced entries."""
+    try:
+        command.downgrade(alembic_config, "a68e6b177851")
+        with engine.begin() as conn:
+            conn.execute(
+                text(
+                    "INSERT INTO cards (id, limit_cents, available_cents)"
+                    " VALUES (:card, 1000, 600)"
+                ),
+                {"card": CARD_ID},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO authorizations (id, network_request_id,"
+                    " request_hash, card_id, amount_cents, decision)"
+                    " VALUES (:a, 'old-ok', 'h1', :card, 600, 'approved')"
+                ),
+                {"a": APPROVED_ID, "card": CARD_ID},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO holds (id, authorization_id, card_id, amount_cents,"
+                    " captured_cents, status)"
+                    " VALUES (:h, :a, :card, 600, 400, 'partially_captured')"
+                ),
+                {"h": HOLD_ID, "a": APPROVED_ID, "card": CARD_ID},
+            )
+            conn.execute(
+                text(
+                    "INSERT INTO captures (id, network_capture_id, request_hash,"
+                    " hold_id, authorization_id, amount_cents, released_cents)"
+                    " VALUES (:c, 'old-cap', 'h2', :h, :a, 400, 200)"
+                ),
+                {"c": CAPTURE_ID, "h": HOLD_ID, "a": APPROVED_ID},
+            )
+        command.upgrade(alembic_config, "head")
+
+        with engine.connect() as conn:
+            rows = conn.execute(
+                text(
+                    "SELECT t.kind, t.capture_id, e.account, e.card_id,"
+                    " e.amount_cents FROM ledger_entries e"
+                    " JOIN ledger_transactions t ON t.id = e.ledger_transaction_id"
+                    " ORDER BY e.amount_cents"
+                )
+            ).all()
+        assert [tuple(map(str, r)) for r in rows] == [
+            ("capture", CAPTURE_ID, "card_spend", CARD_ID, "-400"),
+            ("capture", CAPTURE_ID, "merchant_settlement", "None", "400"),
+        ]
+    finally:
+        command.upgrade(alembic_config, "head")
+        with engine.begin() as conn:
+            conn.execute(text("TRUNCATE cards, authorizations, holds CASCADE"))
+
+
 CARD_ID = "11111111-1111-4111-8111-111111111111"
 APPROVED_ID = "22222222-2222-4222-8222-222222222222"
 DECLINED_ID = "33333333-3333-4333-8333-333333333333"
+HOLD_ID = "44444444-4444-4444-8444-444444444444"
+CAPTURE_ID = "55555555-5555-4555-8555-555555555555"
