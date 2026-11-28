@@ -6,7 +6,7 @@ pending, a hold moves exactly once:
     pending -> captured            capture of the whole hold
     pending -> partially_captured  capture of part of it; the rest is released
     pending -> reversed            reversal; all of it is released
-    pending -> expired             (nothing does this yet: the expiry worker will)
+    pending -> expired             too old; all of it is released (expire_holds)
 
 The other four states are final. Any other move raises InvalidHoldTransition,
 which the API turns into a 409.
@@ -15,6 +15,8 @@ which the API turns into a 409.
 already subtracted the whole hold from.
 """
 
+from collections import defaultdict
+from datetime import timedelta
 from typing import NoReturn
 from uuid import UUID, uuid4
 
@@ -108,7 +110,7 @@ def reversal_outcome(status: str) -> HoldStatus:
 #
 # Lock order is always hold, then card. authorize() locks the card and then
 # inserts a new hold, but it never locks an existing hold, so the two can't
-# deadlock.
+# deadlock. expire_holds() follows the same order: holds first, then cards.
 
 
 def capture(session: Session, request: CaptureRequest) -> CaptureResponse:
@@ -234,6 +236,86 @@ def _reverse(session: Session, request: ReversalRequest) -> ReversalResponse:
         released_cents=released_cents,
         hold_status=new_status,
     )
+
+
+def expire_holds(session: Session, *, older_than_seconds: int, limit: int = 100) -> int:
+    """Expire up to `limit` pending holds older than the window; release their cents.
+
+    One batch, in one transaction. Returns how many holds it expired, so a
+    caller can keep going while it gets full batches back.
+
+    Safe to run from many workers at once, and alongside captures and
+    reversals:
+
+    1. Claim the oldest pending holds with SELECT ... FOR UPDATE SKIP LOCKED.
+       SKIP LOCKED means a hold that another transaction has locked (another
+       expiry worker's batch, or a capture or reversal in progress) is left
+       out instead of waited for. So two workers always get disjoint batches,
+       and neither blocks the other. By the time another worker could claim
+       one of our holds, we've committed and it is no longer pending.
+       The age is measured with the database's now(), not Python's clock, so
+       workers on different machines agree on what's old.
+    2. Mark them expired. The status = 'pending' condition is a second guard:
+       even if the lock were missing, an UPDATE can only expire a hold that is
+       still pending.
+    3. Give the cents back with UPDATE cards SET available_cents =
+       available_cents + :released, so Postgres does the addition and a
+       concurrent authorization's debit can't be lost (hard rule 3). Holds on
+       the same card are added together first, and cards are updated in
+       sorted id order: two batches that touch the same cards then lock them
+       in the same order and can't deadlock each other.
+
+    Nothing is captured, so there is no ledger posting.
+    """
+    try:
+        return _expire_holds(session, older_than_seconds, limit)
+    except Exception:
+        session.rollback()
+        raise
+
+
+def _expire_holds(session: Session, older_than_seconds: int, limit: int) -> int:
+    # func.now() - timedelta(...) becomes now() - interval '...' in SQL.
+    cutoff = func.now() - timedelta(seconds=older_than_seconds)
+    claimed = session.exec(
+        select(HoldRow.id, HoldRow.card_id, HoldRow.amount_cents)
+        .where(HoldRow.status == "pending", col(HoldRow.created_at) < cutoff)
+        .order_by(col(HoldRow.created_at))
+        .limit(limit)
+        .with_for_update(skip_locked=True)
+    ).all()
+    if not claimed:
+        session.rollback()  # ends the (read-only) transaction
+        return 0
+
+    expired_ids = session.exec(
+        update(HoldRow)
+        .where(
+            col(HoldRow.id).in_([hold_id for hold_id, _, _ in claimed]),
+            col(HoldRow.status) == "pending",
+        )
+        .values(status="expired", updated_at=func.now())
+        .returning(col(HoldRow.id))
+    ).scalars()
+    expired = set(expired_ids)
+    # Every claimed hold is locked and pending, so all of them are expired.
+    # If that ever weren't true, release only what was actually expired.
+
+    # defaultdict(int): a missing card starts at 0, so += just works. This
+    # only adds up amounts from the rows we locked; the balance itself is
+    # never read here.
+    released: defaultdict[UUID, int] = defaultdict(int)
+    for hold_id, card_id, amount_cents in claimed:
+        if hold_id in expired:
+            released[card_id] += amount_cents
+    for card_id in sorted(released):
+        session.exec(
+            update(CardRow)
+            .where(col(CardRow.id) == card_id)
+            .values(available_cents=col(CardRow.available_cents) + released[card_id])
+        )
+    session.commit()
+    return len(expired)
 
 
 def _lock_hold(session: Session, authorization_id: UUID) -> HoldRow | None:
