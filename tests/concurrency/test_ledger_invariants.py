@@ -7,10 +7,10 @@ before it. Afterwards the invariant checker must find nothing wrong: every
 ledger transaction sums to zero, and every card's
 available = limit - pending holds - captured.
 
-Waves of 100 rather than one burst of 1,000: each uvicorn worker's pool
-opens up to 15 connections, and a much bigger burst churns them fast enough
-to hit Postgres's default limit of 100 clients, which is a 500 that has
-nothing to do with the ledger.
+The burst also exercises the database pool: 4 workers fire up to 100
+requests at Postgres at once. A fixed-size pool per worker (see
+db_pool_size in settings.py) makes the extra requests wait for a connection
+instead of opening new ones past Postgres's limit, so any 500 here is a bug.
 
 The random generator is seeded, so a failure can be replayed exactly; the
 interleaving inside Postgres still differs from run to run.
