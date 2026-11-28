@@ -2,6 +2,7 @@
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -22,6 +23,18 @@ class Settings(BaseSettings):
     # workers * db_pool_size comfortably below max_connections.
     db_pool_size: int = 10
     db_max_overflow: int = 0
+
+    # Hold expiry (see workers/hold_expiry.py). A pending hold older than
+    # hold_expiry_seconds is expired and its cents go back to the card. 7 days
+    # is a common network default for how long an authorization stays valid.
+    # Field(gt=0) makes pydantic reject zero or negative values at startup:
+    # a zero window would expire every hold the moment it was placed.
+    hold_expiry_seconds: int = Field(default=7 * 24 * 60 * 60, gt=0)
+    # How long the worker sleeps between runs.
+    hold_expiry_interval_seconds: float = Field(default=60, gt=0)
+    # Holds claimed (and locked) per transaction. Small batches keep each
+    # transaction, and the card rows it locks, short.
+    hold_expiry_batch_size: int = Field(default=100, gt=0)
 
 
 @lru_cache

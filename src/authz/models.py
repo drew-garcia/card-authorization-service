@@ -14,10 +14,12 @@ from sqlalchemy import (
     Column,
     DateTime,
     ForeignKey,
+    Index,
     Text,
     UniqueConstraint,
     Uuid,
     func,
+    text,
 )
 from sqlmodel import Field, SQLModel
 
@@ -109,6 +111,14 @@ class HoldRow(SQLModel, table=True):
         # One hold per authorization. Captures and reversals find the hold by
         # authorization_id, and this gives them the index to do it.
         UniqueConstraint("authorization_id", name="uq_holds_authorization_id"),
+        # For the expiry worker's "oldest pending holds" query. Partial (WHERE
+        # status = 'pending'): settled holds are never looked at again, so
+        # leaving them out keeps the index small however many holds pile up.
+        Index(
+            "ix_holds_pending_created_at",
+            "created_at",
+            postgresql_where=text("status = 'pending'"),
+        ),
     )
 
     id: UUID = Field(default_factory=uuid4, primary_key=True)
